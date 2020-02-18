@@ -11,6 +11,7 @@ import (
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/client"
+	"github.com/elastic/go-sysinfo"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )
@@ -19,12 +20,28 @@ const (
 	BUFFER_SIZE int = 16
 )
 
+var (
+	memLimit float64 = 0
+)
+
 // StatsHandler is used to fetch docker stats and send it to clients
 type StatsHandler struct {
 	cli        *client.Client
 	ctx        context.Context
 	wsClients  map[uuid.UUID]*websocket.Conn
 	fetchMutex *sync.Mutex
+}
+
+type Stats struct {
+	Name          string  `json:"name"`
+	Memory        float64 `json:"memory"`
+	MemoryLimit   float64 `json:"memoryLimit"`
+	MemoryPercent float64 `json:"memoryPercent"`
+	Cpu           float64 `json:"cpu"`
+	NetIn         float64 `json:"netIn"`
+	NetOut        float64 `json:"netOut"`
+	BlockIn       uint64  `json:"blockIn"`
+	BlockOut      uint64  `json:"blockOut"`
 }
 
 // FetchStats fetches stats from docker client SDK and API
@@ -37,6 +54,10 @@ func (sh *StatsHandler) FetchStats() {
 
 	// Get all running containers
 	containers, _ := sh.cli.ContainerList(sh.ctx, types.ContainerListOptions{})
+
+	host, _ := sysinfo.Host()
+	hostMemory, _ := host.Memory()
+	memLimit = float64(hostMemory.Total)
 
 	// Infinite loop
 	for {
@@ -61,7 +82,14 @@ func (sh *StatsHandler) ReadStats(wg *sync.WaitGroup, container types.Container)
 	stats, _ := sh.cli.ContainerStats(sh.ctx, container.ID, true)
 
 	buffer := make([]byte, BUFFER_SIZE)
-	var fullData []byte
+	var (
+		fullData []byte
+
+		blkRead, blkWrite uint64
+		netRx, netTx      float64
+		cpuPercent        float64
+		mem, memPercent   float64
+	)
 	// Infinite loop to read buffer
 	for {
 		// Read content into a buffer
@@ -84,14 +112,44 @@ func (sh *StatsHandler) ReadStats(wg *sync.WaitGroup, container types.Container)
 				stats.Body.Close()
 				break
 			}
-			var result map[string]interface{}
+
 			// Unmarshal JSON data
-			json.Unmarshal(fullData, &result)
-			// fmt.Println(result["name"])
-			memory_stats := result["memory_stats"].(map[string]interface{})
-			// fmt.Println(memory_stats["usage"].(float64))
+			var result types.StatsJSON
+			err := json.Unmarshal(fullData, &result)
+			if err != nil {
+				fmt.Println(err)
+			}
+
+			// Set values
+			if stats.OSType != "windows" {
+				previousCPU := result.PreCPUStats.CPUUsage.TotalUsage
+				previousSystem := result.PreCPUStats.SystemUsage
+				cpuPercent = calculateCPUPercentUnix(previousCPU, previousSystem, &result)
+				blkRead, blkWrite = calculateBlockIO(result.BlkioStats)
+				mem = calculateMemUsageUnixNoCache(result.MemoryStats)
+			} else {
+				cpuPercent = calculateCPUPercentWindows(&result)
+				blkRead = result.StorageStats.ReadSizeBytes
+				blkWrite = result.StorageStats.WriteSizeBytes
+				mem = float64(result.MemoryStats.PrivateWorkingSet)
+			}
+			memPercent = mem / memLimit * 100
+			netRx, netTx = calculateNetwork(result.Networks)
+
 			// Send to clients
-			sh.SendToClients(fmt.Sprintf("%s: %f", result["name"], memory_stats["usage"].(float64)))
+			stats := &Stats{
+				Name:          result.Name,
+				Memory:        mem,
+				MemoryLimit:   memLimit,
+				MemoryPercent: memPercent,
+				Cpu:           cpuPercent,
+				NetIn:         netRx,
+				NetOut:        netTx,
+				BlockIn:       blkWrite,
+				BlockOut:      blkRead,
+			}
+			message, _ := json.Marshal(stats)
+			sh.SendToClients(message)
 			fullData = nil
 		}
 	}
@@ -127,8 +185,8 @@ func (sh *StatsHandler) GetClientsNb() int {
 }
 
 // SendToClients sends a message to all clients in the list
-func (sh *StatsHandler) SendToClients(message string) {
+func (sh *StatsHandler) SendToClients(message []byte) {
 	for _, c := range sh.wsClients {
-		c.WriteMessage(websocket.TextMessage, []byte(message))
+		c.WriteMessage(websocket.TextMessage, message)
 	}
 }
