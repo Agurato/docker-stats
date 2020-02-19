@@ -33,6 +33,7 @@ type StatsHandler struct {
 }
 
 type Stats struct {
+	Id            string  `json:"id"`
 	Name          string  `json:"name"`
 	Memory        float64 `json:"memory"`
 	MemoryLimit   float64 `json:"memoryLimit"`
@@ -138,6 +139,7 @@ func (sh *StatsHandler) ReadStats(wg *sync.WaitGroup, container types.Container)
 
 			// Send to clients
 			stats := &Stats{
+				Id:            result.ID,
 				Name:          result.Name,
 				Memory:        mem,
 				MemoryLimit:   memLimit,
