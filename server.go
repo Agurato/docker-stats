@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"net/http"
+	"os"
 
 	"github.com/gorilla/websocket"
 )
@@ -36,4 +37,9 @@ func ServeWS(w http.ResponseWriter, r *http.Request, sh *StatsHandler) {
 		}
 		fmt.Printf("recv: %s", message)
 	}
+}
+
+func baseUrlHandler(w http.ResponseWriter, req *http.Request) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Write([]byte(os.Getenv("BASEURL")))
 }

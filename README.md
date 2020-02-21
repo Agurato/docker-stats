@@ -7,7 +7,7 @@ Simple server displaying stats of your docker containers
 Run from docker container (**only for armhf**):
 
 ```shell
-docker run -d --name docker-stats -v /var/run/docker.sock:/var/run/docker.sock -p 11235:11235 agurato/docker-stats:latest
+docker run -d --name docker-stats -v /var/run/docker.sock:/var/run/docker.sock -p 11235:11235 -e BASEURL=localhost:11235 agurato/docker-stats:latest
 ```
 
 Using `docker-compose`:
@@ -20,6 +20,8 @@ services:
     image: agurato/docker-stats:latest
     ports:
       - 11235:11235
+    environment:
+      - BASEURL=localhost:11235
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     restart: unless-stopped

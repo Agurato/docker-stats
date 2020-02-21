@@ -27,6 +27,8 @@ func main() {
 
 	// Static file server
 	http.Handle("/", http.FileServer(http.Dir("static")))
+	// Base URL fetch for WS connection
+	http.HandleFunc("/baseurl", baseUrlHandler)
 	// Websockets server
 	http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
 		ServeWS(w, r, &statsHandler)
