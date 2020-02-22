@@ -24,14 +24,6 @@ var (
 	memLimit float64 = 0
 )
 
-// StatsHandler is used to fetch docker stats and send it to clients
-type StatsHandler struct {
-	cli        *client.Client
-	ctx        context.Context
-	wsClients  map[uuid.UUID]*websocket.Conn
-	fetchMutex *sync.Mutex
-}
-
 type Stats struct {
 	Id            string  `json:"id"`
 	Name          string  `json:"name"`
@@ -45,6 +37,17 @@ type Stats struct {
 	BlockOut      uint64  `json:"blockOut"`
 }
 
+// StatsHandler is used to fetch docker stats and send it to clients
+type StatsHandler struct {
+	cli        *client.Client
+	ctx        context.Context
+	wsClients  map[uuid.UUID]*websocket.Conn
+	fetchMutex *sync.Mutex
+
+	containerNb  int
+	currentStats []Stats
+}
+
 // FetchStats fetches stats from docker client SDK and API
 func (sh *StatsHandler) FetchStats() {
 	sh.ctx = context.Background()
@@ -52,9 +55,6 @@ func (sh *StatsHandler) FetchStats() {
 	sh.cli, _ = client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	// Init clients list
 	sh.wsClients = make(map[uuid.UUID]*websocket.Conn)
-
-	// Get all running containers
-	containers, _ := sh.cli.ContainerList(sh.ctx, types.ContainerListOptions{})
 
 	host, _ := sysinfo.Host()
 	hostMemory, _ := host.Memory()
@@ -65,6 +65,11 @@ func (sh *StatsHandler) FetchStats() {
 		// Wait for mutex to be unlocked (= waiting for at least 1 client to be connected)
 		sh.fetchMutex.Lock()
 		sh.fetchMutex.Unlock()
+
+		// Get all running containers
+		containers, _ := sh.cli.ContainerList(sh.ctx, types.ContainerListOptions{})
+		sh.containerNb = len(containers)
+
 		// WaitGroup to wait for all goroutines to be finished
 		var wg sync.WaitGroup
 		for _, container := range containers {
@@ -137,8 +142,8 @@ func (sh *StatsHandler) ReadStats(wg *sync.WaitGroup, container types.Container)
 			memPercent = mem / memLimit * 100
 			netRx, netTx = calculateNetwork(result.Networks)
 
-			// Send to clients
-			stats := &Stats{
+			// Prepare message
+			stats := Stats{
 				Id:            result.ID,
 				Name:          result.Name,
 				Memory:        mem,
@@ -150,10 +155,21 @@ func (sh *StatsHandler) ReadStats(wg *sync.WaitGroup, container types.Container)
 				BlockIn:       blkWrite,
 				BlockOut:      blkRead,
 			}
-			message, _ := json.Marshal(stats)
-			sh.SendToClients(message)
+			sh.PrepareStats(stats)
 			fullData = nil
 		}
+	}
+}
+
+// PrepareStats sends one message to all clients with stats for all of the containers at once
+func (sh *StatsHandler) PrepareStats(stats Stats) {
+	// Add container stats to the slice
+	sh.currentStats = append(sh.currentStats, stats)
+	// When slice is complete, send message to the clients and empty the slice
+	if len(sh.currentStats) == sh.containerNb {
+		message, _ := json.Marshal(sh.currentStats)
+		sh.SendToClients(message)
+		sh.currentStats = nil
 	}
 }
 
