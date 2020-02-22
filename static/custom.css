@@ -1,0 +1,11 @@
+body {
+    font-family: 'PT Mono', monospace;
+}
+
+th {
+    text-align: left;
+}
+
+table {
+    border-spacing: 100px 0;
+}
